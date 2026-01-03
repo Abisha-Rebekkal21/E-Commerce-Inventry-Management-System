@@ -7,100 +7,180 @@ import javax.swing.table.DefaultTableModel;
 import java.sql.*;
 
 class InventoryWindow extends Frame implements ActionListener, WindowListener {
+
     TextField searchField;
-    Button searchButton, refreshButton;
+    Button searchButton, refreshButton, saveButton;
     Label alertLabel;
     JTable table;
     DefaultTableModel tableModel;
+
+    String url = "jdbc:mysql://localhost:3306/ecommerce_db?useSSL=false&serverTimezone=UTC";
+    String dbUsername = "root";
+    String dbPassword = "";
 
     public InventoryWindow() {
         setTitle("Inventory Management");
         setLayout(new BorderLayout());
 
-        // Title
         Label titleLabel = new Label("Inventory", Label.CENTER);
-        titleLabel.setFont(new Font("Arial", Font.BOLD, 30));
+        titleLabel.setFont(new Font("Arial", Font.BOLD, 28));
         add(titleLabel, BorderLayout.NORTH);
 
-        // Create table model and JTable
-        String[] columns = {"Product Name", "Price", "Quantity"};
+        String[] columns = {"ID", "Product Name", "Price", "Quantity"};
         tableModel = new DefaultTableModel(columns, 0);
         table = new JTable(tableModel);
-        table.setFillsViewportHeight(true);
 
-        // Scroll pane for table
-        JScrollPane scrollPane = new JScrollPane(table);
-        add(scrollPane, BorderLayout.CENTER);
+        add(new JScrollPane(table), BorderLayout.CENTER);
 
-        // Search section
-        Panel searchPanel = new Panel(new GridLayout(1, 3, 10, 10));
-        searchField = new TextField(20);
-        searchButton = new Button("Search Product");
-        refreshButton = new Button("Refresh Inventory");
+        Panel controlPanel = new Panel();
+        searchField = new TextField(15);
+        searchButton = new Button("Search");
+        refreshButton = new Button("Refresh");
+        saveButton = new Button("Save Changes");
 
-        searchPanel.add(new Label("Search by Product Name:"));
-        searchPanel.add(searchField);
-        searchPanel.add(searchButton);
+        controlPanel.add(new Label("Product:"));
+        controlPanel.add(searchField);
+        controlPanel.add(searchButton);
+        controlPanel.add(refreshButton);
+        controlPanel.add(saveButton);
 
-        add(searchPanel, BorderLayout.NORTH);
+        add(controlPanel, BorderLayout.SOUTH);
 
-        // Threshold alert section
         alertLabel = new Label();
         alertLabel.setForeground(Color.RED);
-        add(alertLabel, BorderLayout.SOUTH);
+        add(alertLabel, BorderLayout.NORTH);
 
         searchButton.addActionListener(this);
         refreshButton.addActionListener(this);
+        saveButton.addActionListener(this);
         addWindowListener(this);
 
-        // Load initial inventory and check threshold alert
-        loadInventory();
+        loadFromDatabaseToLinkedList();
+        displayFromLinkedListToTable();
         checkThresholdAlert();
 
-        setSize(600, 400);
+        setSize(700, 450);
         setVisible(true);
     }
 
-    // Method to load inventory data from the database into the table
-    private void loadInventory() {
-        tableModel.setRowCount(0); // Clear existing rows
-        String url = "jdbc:mysql://localhost:3306/ecommerce_db";
-        String dbUsername = "root"; // Replace with your database username
-        String dbPassword = "";     // Replace with your database password
+    /* ---------------- DATABASE → LINKEDLIST ---------------- */
+    private void loadFromDatabaseToLinkedList() {
+        InventoryData.inventory.clear();
 
-        try (Connection conn = DriverManager.getConnection(url, dbUsername, dbPassword);
-             Statement stmt = conn.createStatement();
-             ResultSet rs = stmt.executeQuery("SELECT * FROM products")) {
+        String query = "SELECT * FROM products";
+        try (Connection con = DriverManager.getConnection(url, dbUsername, dbPassword);
+             Statement st = con.createStatement();
+             ResultSet rs = st.executeQuery(query)) {
 
             while (rs.next()) {
-                String name = rs.getString("name");
-                double price = rs.getDouble("price");
-                int quantity = rs.getInt("quantity");
-                tableModel.addRow(new Object[]{name, price, quantity});
+                String[] item = {
+                        rs.getString("id"),
+                        rs.getString("name"),
+                        String.valueOf(rs.getDouble("price")),
+                        String.valueOf(rs.getInt("quantity"))
+                };
+                InventoryData.inventory.add(item);
             }
-        } catch (SQLException ex) {
-            ex.printStackTrace();
-            JOptionPane.showMessageDialog(this, "Error loading inventory from the database.");
+        } catch (SQLException e) {
+            e.printStackTrace();
         }
     }
 
-    // Method to check for products below the threshold and display an alert
+    /* ---------------- LINKEDLIST → TABLE ---------------- */
+    private void displayFromLinkedListToTable() {
+        tableModel.setRowCount(0);
+        for (String[] item : InventoryData.inventory) {
+            tableModel.addRow(item);
+        }
+    }
+
+    /* ---------------- TABLE → LINKEDLIST ---------------- */
+    private void updateLinkedListFromTable() {
+        InventoryData.inventory.clear();
+        for (int i = 0; i < tableModel.getRowCount(); i++) {
+            String[] item = new String[4];
+            for (int j = 0; j < 4; j++) {
+                item[j] = tableModel.getValueAt(i, j).toString();
+            }
+            InventoryData.inventory.add(item);
+        }
+    }
+
+    /* ---------------- LINKEDLIST → DATABASE ---------------- */
+    private void saveLinkedListToDatabase() {
+        updateLinkedListFromTable();
+
+        String query = "UPDATE products SET name=?, price=?, quantity=? WHERE id=?";
+        try (Connection con = DriverManager.getConnection(url, dbUsername, dbPassword);
+             PreparedStatement ps = con.prepareStatement(query)) {
+
+            for (String[] item : InventoryData.inventory) {
+                ps.setString(1, item[1]);
+                ps.setDouble(2, Double.parseDouble(item[2]));
+                ps.setInt(3, Integer.parseInt(item[3]));
+                ps.setInt(4, Integer.parseInt(item[0]));
+                ps.executeUpdate();
+            }
+            JOptionPane.showMessageDialog(this, "Changes saved to database!");
+        } catch (SQLException e) {
+            e.printStackTrace();
+        }
+    }
+
+    /* ---------------- THRESHOLD ALERT ---------------- */
     private void checkThresholdAlert() {
-        String url = "jdbc:mysql://localhost:3306/ecommerce_db";
-        String dbUsername = "root";
-        String dbPassword = "";
         int threshold = 5;
-        StringBuilder alertMessage = new StringBuilder();
+        StringBuilder msg = new StringBuilder();
 
-        String query = "SELECT name, quantity FROM products WHERE quantity < ?";
+        for (String[] item : InventoryData.inventory) {
+            int qty = Integer.parseInt(item[3]);
+            if (qty < threshold) {
+                msg.append("Low Stock: ").append(item[1]).append(" (").append(qty).append(")  ");
+            }
+        }
+        alertLabel.setText(msg.length() > 0 ? msg.toString() : "All items above threshold");
+    }
 
-        try (Connection conn = DriverManager.getConnection(url, dbUsername, dbPassword);
-             PreparedStatement pstmt = conn.prepareStatement(query)) {
+    /* ---------------- EVENTS ---------------- */
+    public void actionPerformed(ActionEvent e) {
+        if (e.getSource() == refreshButton) {
+            saveLinkedListToDatabase();
+            loadFromDatabaseToLinkedList();
+            displayFromLinkedListToTable();
+            checkThresholdAlert();
+        }
 
-            pstmt.setInt(1, threshold);
-            ResultSet rs = pstmt.executeQuery();
+        if (e.getSource() == saveButton) {
+            saveLinkedListToDatabase();
+        }
 
-            while (rs.next()) {
+        if (e.getSource() == searchButton) {
+            String name = searchField.getText();
+            for (String[] item : InventoryData.inventory) {
+                if (item[1].equalsIgnoreCase(name)) {
+                    JOptionPane.showMessageDialog(this,
+                            "Found: " + item[1] + ", Price: " + item[2] + ", Qty: " + item[3]);
+                    return;
+                }
+            }
+            JOptionPane.showMessageDialog(this, "Product not found");
+        }
+    }
+
+    /* ---------------- WINDOW CLOSE ---------------- */
+    public void windowClosing(WindowEvent we) {
+        saveLinkedListToDatabase();
+        dispose();
+    }
+
+    public void windowOpened(WindowEvent we) {}
+    public void windowClosed(WindowEvent we) {}
+    public void windowIconified(WindowEvent we) {}
+    public void windowDeiconified(WindowEvent we) {}
+    public void windowActivated(WindowEvent we) {}
+    public void windowDeactivated(WindowEvent we) {}
+}
+
                 String name = rs.getString("name");
                 int quantity = rs.getInt("quantity");
                 alertMessage.append("Low Stock: ").append(name).append(" (").append(quantity).append(")\n");
